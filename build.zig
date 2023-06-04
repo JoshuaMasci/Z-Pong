@@ -13,6 +13,7 @@ pub fn build(b: *std.Build) void {
 
     exe.linkSystemLibrary("sdl2");
     exe.linkSystemLibrary("sdl2_image");
+    exe.linkSystemLibrary("sdl2_ttf");
     exe.linkLibC();
 
     b.installArtifact(exe);
