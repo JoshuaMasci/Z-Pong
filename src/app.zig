@@ -5,6 +5,7 @@ const c = @import("c.zig");
 const StringHash = @import("string_hash.zig");
 const input = @import("input.zig");
 const sdl_input = @import("sdl_input.zig");
+const ui = @import("ui.zig");
 
 pub const GameInputContext = input.InputContext{
     .name = StringHash.new("Game"),
@@ -50,7 +51,9 @@ pub const App = struct {
     //Test Data
     some_texture: SdlTexture,
     some_font: ?*c.TTF_Font,
-    some_text_texture: SdlTexture,
+
+    title_widget: ui.TextWidget,
+    text_widget: ui.TextWidget,
 
     pub fn init(allocator: std.mem.Allocator) !Self {
         log.info("Starting SDL2", .{});
@@ -64,7 +67,9 @@ pub const App = struct {
             std.debug.panic("SDL_TTF ERROR {s}", .{c.TTF_GetError()});
         }
 
-        var window = c.SDL_CreateWindow("Z-Pong", 0, 0, 1920, 1080, c.SDL_WINDOW_MAXIMIZED | c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_ALLOW_HIGHDPI);
+        var window = c.SDL_CreateWindow("Z-Pong", c.SDL_WINDOWPOS_CENTERED, c.SDL_WINDOWPOS_CENTERED, 1920, 1080, c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_ALLOW_HIGHDPI);
+        c.SDL_SetWindowMinimumSize(window, 960, 540);
+
         var sdl_renderer = c.SDL_CreateRenderer(window, -1, c.SDL_RENDERER_ACCELERATED | c.SDL_RENDERER_PRESENTVSYNC).?;
 
         var input_system = try allocator.create(input.InputSystem);
@@ -88,9 +93,8 @@ pub const App = struct {
         var texture = SdlTexture.fromTexture(c.IMG_LoadTexture(sdl_renderer, "assets/some.png"));
 
         var font = c.TTF_OpenFont("assets/Kenney High.ttf", 100);
-        var text_surface = c.TTF_RenderText_Solid(font, "This is some test text for Z-Pong!?!?!?", c.SDL_Color{ .r = 123, .g = 41, .b = 99, .a = 255 });
-        defer c.SDL_FreeSurface(text_surface);
-        var text_texture = SdlTexture.fromTexture(c.SDL_CreateTextureFromSurface(sdl_renderer, text_surface));
+        var title_widget = ui.TextWidget.init(sdl_renderer, font.?, "This is some test text for Z-Pong!?!?!?", c.SDL_Color{ .r = 123, .g = 41, .b = 99, .a = 255 }, c.SDL_Color{ .r = 0, .g = 0, .b = 0, .a = 255 });
+        var text_widget = ui.TextWidget.init(sdl_renderer, font.?, "assets/Kenney High.ttf", c.SDL_Color{ .r = 255, .g = 255, .b = 255, .a = 255 }, null);
 
         return .{
             .should_quit = false,
@@ -103,8 +107,10 @@ pub const App = struct {
             .sdl_input_system = sdl_input_system,
 
             .some_texture = texture,
+
             .some_font = font,
-            .some_text_texture = text_texture,
+            .title_widget = title_widget,
+            .text_widget = text_widget,
         };
     }
 
@@ -115,8 +121,10 @@ pub const App = struct {
         self.input_system.deinit();
         self.allocator.destroy(self.input_system);
 
+        self.text_widget.deinit();
+        self.title_widget.deinit();
+
         self.some_texture.deinit();
-        self.some_text_texture.deinit();
         c.TTF_CloseFont(self.some_font);
 
         c.SDL_DestroyRenderer(self.sdl_renderer);
@@ -147,11 +155,15 @@ pub const App = struct {
         _ = c.SDL_SetRenderDrawColor(self.sdl_renderer, 255, 105, 97, 0);
         _ = c.SDL_RenderClear(self.sdl_renderer);
 
+        var screen_width_i: i32 = 0;
+        var screen_height_i: i32 = 0;
+        _ = c.SDL_GetRendererOutputSize(self.sdl_renderer, &screen_width_i, &screen_height_i);
+
+        var screen_center_x = screen_width_i >> 1;
+        var screen_center_y = screen_height_i >> 1;
+
         //Preserve the aspect ratio of the background image
         {
-            var screen_width_i: i32 = 0;
-            var screen_height_i: i32 = 0;
-            _ = c.SDL_GetRendererOutputSize(self.sdl_renderer, &screen_width_i, &screen_height_i);
             var screen_width = @intToFloat(f32, screen_width_i);
             var screen_height = @intToFloat(f32, screen_height_i);
             var texture_width = @intToFloat(f32, self.some_texture.width);
@@ -184,19 +196,9 @@ pub const App = struct {
             }
         }
 
-        //Render Text
-        {
-            //TODO: Center Text on x axis
-            var draw_area = c.SDL_Rect{
-                .x = 0,
-                .y = 0,
-                .w = self.some_text_texture.width,
-                .h = self.some_text_texture.height,
-            };
-            _ = c.SDL_SetRenderDrawColor(self.sdl_renderer, 0, 0, 0, 255);
-            _ = c.SDL_RenderFillRect(self.sdl_renderer, &draw_area);
-            _ = c.SDL_RenderCopy(self.sdl_renderer, self.some_text_texture.handle, null, &draw_area);
-        }
+        self.title_widget.draw(self.sdl_renderer.?, [2]i32{ screen_center_x, 0 }, 1.0, .Centered, .Positive);
+        self.text_widget.draw(self.sdl_renderer.?, [2]i32{ screen_center_x, screen_center_y }, 1.0, .Centered, .Centered);
+
         _ = c.SDL_RenderPresent(self.sdl_renderer);
     }
 };
