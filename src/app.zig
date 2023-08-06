@@ -7,32 +7,53 @@ const input = @import("input.zig");
 const sdl_input = @import("sdl_input.zig");
 const ui = @import("ui.zig");
 
+//Maybe shouldn't be in a ui file
+const SdlTexture = ui.SdlTexture;
+
 pub const GameInputContext = input.InputContext{
     .name = StringHash.new("Game"),
     .buttons = &[_]StringHash{StringHash.new("Button1")},
     .axes = &[_]StringHash{StringHash.new("Axis1")},
 };
 
-pub const SdlTexture = struct {
+pub const GameInputCallback = struct {
     const Self = @This();
 
-    handle: ?*c.SDL_Texture,
-    width: i32,
-    height: i32,
+    button1_state: bool,
+    axis1_value: f32,
 
-    pub fn fromTexture(texture: ?*c.SDL_Texture) Self {
-        var width: i32 = 0;
-        var height: i32 = 0;
-        _ = c.SDL_QueryTexture(texture, null, null, &width, &height);
+    fn init() Self {
         return .{
-            .handle = texture,
-            .width = width,
-            .height = height,
+            .button1_state = false,
+            .axis1_value = 0.0,
+        };
+    }
+    fn callback(self: *Self) input.InputContextCallback {
+        return .{
+            .ptr = self,
+            .button_callback = trigger_button,
+            .axis_callback = trigger_axis,
         };
     }
 
-    pub fn deinit(self: *Self) void {
-        c.SDL_DestroyTexture(self.handle);
+    fn trigger_button(self_ptr: *anyopaque, button: StringHash, state: input.ButtonState) void {
+        const self = @as(*Self, @ptrCast(@alignCast(self_ptr)));
+
+        log.info("Button Triggered {s} -> {}", .{ button.string, state });
+
+        if (button.hash == StringHash.new("Button1").hash) {
+            self.button1_state = state == input.ButtonState.Pressed;
+        }
+    }
+
+    fn trigger_axis(self_ptr: *anyopaque, axis: StringHash, value: f32) void {
+        const self = @as(*Self, @ptrCast(@alignCast(self_ptr)));
+
+        //log.info("Axis Triggered {s} -> {d:.2}", .{ axis.string, value });
+
+        if (axis.hash == GameInputContext.axes[0].hash) {
+            self.axis1_value = value;
+        }
     }
 };
 
@@ -48,12 +69,21 @@ pub const App = struct {
     input_system: *input.InputSystem,
     sdl_input_system: *sdl_input.SdlInputSystem,
 
-    //Test Data
-    some_texture: SdlTexture,
-    some_font: ?*c.TTF_Font,
+    //Game Assets
+    background_texture: SdlTexture,
+    blue_paddle_texture: SdlTexture,
 
+    some_font: ?*c.TTF_Font,
     title_widget: ui.TextWidget,
     text_widget: ui.TextWidget,
+
+    //Game Data
+    game_input_callback: *GameInputCallback,
+
+    player_paddle_postion: [2]i32,
+
+    const PaddleMoveSpeed = 100;
+    const PaddleYPosMax = 300;
 
     pub fn init(allocator: std.mem.Allocator) !Self {
         log.info("Starting SDL2", .{});
@@ -67,7 +97,7 @@ pub const App = struct {
             std.debug.panic("SDL_TTF ERROR {s}", .{c.TTF_GetError()});
         }
 
-        var window = c.SDL_CreateWindow("Z-Pong", c.SDL_WINDOWPOS_CENTERED, c.SDL_WINDOWPOS_CENTERED, 1920, 1080, c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_ALLOW_HIGHDPI);
+        var window = c.SDL_CreateWindow("Z-Pong", c.SDL_WINDOWPOS_CENTERED, c.SDL_WINDOWPOS_CENTERED, 1920, 1080, c.SDL_WINDOW_ALLOW_HIGHDPI);
         c.SDL_SetWindowMinimumSize(window, 960, 540);
 
         var sdl_renderer = c.SDL_CreateRenderer(window, -1, c.SDL_RENDERER_ACCELERATED | c.SDL_RENDERER_PRESENTVSYNC).?;
@@ -90,11 +120,17 @@ pub const App = struct {
             keyboard.context_bindings.put(GameInputContext.name.hash, game_context) catch std.debug.panic("Hashmap put failed", .{});
         }
 
-        var texture = SdlTexture.fromTexture(c.IMG_LoadTexture(sdl_renderer, "assets/some.png"));
+        var background_texture = SdlTexture.fromTexture(c.IMG_LoadTexture(sdl_renderer, "assets/background_orange.png").?);
+        var blue_paddle_texture = SdlTexture.fromTexture(c.IMG_LoadTexture(sdl_renderer, "assets/paddle_blue.png").?);
 
-        var font = c.TTF_OpenFont("assets/Kenney High.ttf", 100);
-        var title_widget = ui.TextWidget.init(sdl_renderer, font.?, "This is some test text for Z-Pong!?!?!?", c.SDL_Color{ .r = 123, .g = 41, .b = 99, .a = 255 }, c.SDL_Color{ .r = 0, .g = 0, .b = 0, .a = 255 });
-        var text_widget = ui.TextWidget.init(sdl_renderer, font.?, "assets/Kenney High.ttf", c.SDL_Color{ .r = 255, .g = 255, .b = 255, .a = 255 }, null);
+        var font = c.TTF_OpenFont("assets/Kenney High.ttf", 100).?;
+        var title_widget = ui.TextWidget.init(sdl_renderer, font, "This is some test text for Z-Pong!?!?!?", c.SDL_Color{ .r = 123, .g = 41, .b = 99, .a = 255 }, c.SDL_Color{ .r = 0, .g = 0, .b = 0, .a = 255 });
+        var text_widget = ui.TextWidget.init(sdl_renderer, font, "assets/Kenney High.ttf", c.SDL_Color{ .r = 255, .g = 255, .b = 255, .a = 255 }, null);
+
+        var game_input_callback = try allocator.create(GameInputCallback);
+        game_input_callback.* = GameInputCallback.init();
+
+        try input_system.add_callback(GameInputContext.name, game_input_callback.callback());
 
         return .{
             .should_quit = false,
@@ -106,15 +142,22 @@ pub const App = struct {
             .input_system = input_system,
             .sdl_input_system = sdl_input_system,
 
-            .some_texture = texture,
+            .game_input_callback = game_input_callback,
+
+            .background_texture = background_texture,
+            .blue_paddle_texture = blue_paddle_texture,
 
             .some_font = font,
             .title_widget = title_widget,
             .text_widget = text_widget,
+
+            .player_paddle_postion = .{ 0, 0 },
         };
     }
 
     pub fn deinit(self: *Self) void {
+        self.allocator.destroy(self.game_input_callback);
+
         self.sdl_input_system.deinit();
         self.allocator.destroy(self.sdl_input_system);
 
@@ -123,9 +166,10 @@ pub const App = struct {
 
         self.text_widget.deinit();
         self.title_widget.deinit();
-
-        self.some_texture.deinit();
         c.TTF_CloseFont(self.some_font);
+
+        self.blue_paddle_texture.deinit();
+        self.background_texture.deinit();
 
         c.SDL_DestroyRenderer(self.sdl_renderer);
         c.SDL_DestroyWindow(self.window);
@@ -164,10 +208,10 @@ pub const App = struct {
 
         //Preserve the aspect ratio of the background image
         {
-            var screen_width = @intToFloat(f32, screen_width_i);
-            var screen_height = @intToFloat(f32, screen_height_i);
-            var texture_width = @intToFloat(f32, self.some_texture.width);
-            var texture_height = @intToFloat(f32, self.some_texture.height);
+            var screen_width = @as(f32, @floatFromInt(screen_width_i));
+            var screen_height = @as(f32, @floatFromInt(screen_height_i));
+            var texture_width = @as(f32, @floatFromInt(self.background_texture.width));
+            var texture_height = @as(f32, @floatFromInt(self.background_texture.height));
 
             var screen_aspect_ratio = screen_width / screen_height;
             var texture_aspect_ratio = texture_width / texture_height;
@@ -179,25 +223,34 @@ pub const App = struct {
                 if (screen_aspect_ratio > texture_aspect_ratio) {
                     var new_height = texture_width / screen_aspect_ratio;
                     var new_offset = (texture_height - new_height) / 2.0;
-                    src_rect.y = @floatToInt(i32, new_offset);
-                    src_rect.w = self.some_texture.width;
-                    src_rect.h = @floatToInt(i32, new_height);
+                    src_rect.y = @as(i32, @intFromFloat(new_offset));
+                    src_rect.w = self.background_texture.width;
+                    src_rect.h = @as(i32, @intFromFloat(new_height));
                     src_rect_ptr = &src_rect;
                 } else if (screen_aspect_ratio < texture_aspect_ratio) {
                     var new_width = screen_aspect_ratio * texture_height;
                     var new_offset = (texture_width - new_width) / 2.0;
-                    src_rect.x = @floatToInt(i32, new_offset);
-                    src_rect.w = @floatToInt(i32, new_width);
-                    src_rect.h = self.some_texture.height;
+                    src_rect.x = @as(i32, @intFromFloat(new_offset));
+                    src_rect.w = @as(i32, @intFromFloat(new_width));
+                    src_rect.h = self.background_texture.height;
                     src_rect_ptr = &src_rect;
                 }
 
-                _ = c.SDL_RenderCopy(self.sdl_renderer, self.some_texture.handle, src_rect_ptr, null);
+                _ = c.SDL_RenderCopy(self.sdl_renderer, self.background_texture.handle, src_rect_ptr, null);
             }
         }
-
-        self.title_widget.draw(self.sdl_renderer.?, [2]i32{ screen_center_x, 0 }, 1.0, .Centered, .Positive);
+        if (!self.game_input_callback.button1_state) {
+            self.title_widget.draw(self.sdl_renderer.?, [2]i32{ screen_center_x, 0 }, 1.0, .Centered, .Positive);
+        }
         self.text_widget.draw(self.sdl_renderer.?, [2]i32{ screen_center_x, screen_center_y }, 1.0, .Centered, .Centered);
+
+        self.blue_paddle_texture.draw(
+            self.sdl_renderer.?,
+            [2]i32{ screen_center_x + self.player_paddle_postion[0], screen_center_y + self.player_paddle_postion[1] },
+            1.0,
+            .Centered,
+            .Centered,
+        );
 
         _ = c.SDL_RenderPresent(self.sdl_renderer);
     }

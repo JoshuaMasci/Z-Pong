@@ -12,6 +12,32 @@
 const std = @import("std");
 const c = @import("c.zig");
 
+pub const WidgetAlignment = enum {
+    Positive,
+    Centered,
+    Negative,
+};
+
+fn calc_sdl_rect(size: [2]i32, position: [2]i32, scale: f32, horizontal_alignment: WidgetAlignment, vertical_alignment: WidgetAlignment) c.SDL_Rect {
+    var scaled_width = @as(i32, @intFromFloat(@as(f32, @floatFromInt(size[0])) * scale));
+    var scaled_height = @as(i32, @intFromFloat(@as(f32, @floatFromInt(size[1])) * scale));
+    var rect = c.SDL_Rect{ .x = position[0], .y = position[1], .w = scaled_width, .h = scaled_height };
+
+    rect.x -= switch (horizontal_alignment) {
+        .Positive => 0,
+        .Centered => scaled_width >> 1, //Div by 2
+        .Negative => scaled_width,
+    };
+
+    rect.y -= switch (vertical_alignment) {
+        .Positive => 0,
+        .Centered => scaled_height >> 1, //Div by 2
+        .Negative => scaled_height,
+    };
+
+    return rect;
+}
+
 pub const SdlTexture = struct {
     const Self = @This();
 
@@ -41,33 +67,12 @@ pub const SdlTexture = struct {
     pub fn deinit(self: *Self) void {
         c.SDL_DestroyTexture(self.handle);
     }
+
+    pub fn draw(self: Self, renderer: *c.SDL_Renderer, position: [2]i32, scale: f32, horizontal_alignment: WidgetAlignment, vertical_alignment: WidgetAlignment) void {
+        var dst_rect = calc_sdl_rect([2]i32{ self.width, self.height }, position, scale, horizontal_alignment, vertical_alignment);
+        _ = c.SDL_RenderCopy(renderer, self.handle, null, &dst_rect);
+    }
 };
-
-pub const WidgetAlignment = enum {
-    Positive,
-    Centered,
-    Negative,
-};
-
-fn calc_sdl_rect(size: [2]i32, position: [2]i32, scale: f32, horizontal_alignment: WidgetAlignment, vertical_alignment: WidgetAlignment) c.SDL_Rect {
-    var scaled_width = @floatToInt(i32, @intToFloat(f32, size[0]) * scale);
-    var scaled_height = @floatToInt(i32, @intToFloat(f32, size[1]) * scale);
-    var rect = c.SDL_Rect{ .x = position[0], .y = position[1], .w = scaled_width, .h = scaled_height };
-
-    rect.x -= switch (horizontal_alignment) {
-        .Positive => 0,
-        .Centered => scaled_width >> 1, //Div by 2
-        .Negative => scaled_width,
-    };
-
-    rect.y -= switch (vertical_alignment) {
-        .Positive => 0,
-        .Centered => scaled_height >> 1, //Div by 2
-        .Negative => scaled_height,
-    };
-
-    return rect;
-}
 
 pub const TextWidget = struct {
     const Self = @This();
